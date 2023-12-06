@@ -1,4 +1,5 @@
-# BBSims
+# BBSims - map-based simulations for B-mode analysis pipelines
+--------------------------------------------------------------
 
 Library to produce map-based simulations with input experiment configuration
 compatible with Simons Observatory (LiteBIRD is being added).
