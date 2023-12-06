@@ -105,4 +105,3 @@ for comp in ['dust', 'sync', 'cmb']:
 # Write component spectra
 sdic = {f'sed_{comp}': data['seds'][i] for i, comp in enumerate(['dust', 'sync', 'cmb'])}
 np.savez(prefix+f'_seds.npz', **sdic)
-    
