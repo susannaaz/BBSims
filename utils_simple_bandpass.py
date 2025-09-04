@@ -258,7 +258,7 @@ def get_sacc(leff, cls, l_unbinned, windows, params, cov=None):
 
     use_bandpass = params.get('use_bandpass', False)
     bandpass_dir = params.get('bandpass_dir', None)
-    beam_fwhm = params.get('beam_fwhm_arcmin', None)
+    beam_fwhm_file = params.get('beam_fwhm_file', None)
 
     for inu, nu in enumerate(nus):
         # --- Bandpass ---
@@ -269,8 +269,11 @@ def get_sacc(leff, cls, l_unbinned, windows, params, cov=None):
             w_bp = np.array([0.0, 1.0, 0.0])
 
         # --- Beam ---
-        if beam_fwhm is not None:
-            sigma_rad = np.radians(beam_fwhm[inu] / 60.) / np.sqrt(8 * np.log(2))
+        beam_fwhm_rad = None
+        if 'beam_fwhm_file' in params and params['beam_fwhm_file'] is not None:
+            rad_factor = np.pi / (60. * 180.)
+            beam_fwhm = np.loadtxt(params['beam_fwhm_file'])
+            sigma_rad = (beam_fwhm[inu] * rad_factor) / np.sqrt(8 * np.log(2))  # in radians
             beam = np.exp(-0.5 * l_unbinned * (l_unbinned + 1) * sigma_rad**2)
         else:
             beam = np.ones_like(l_unbinned)
@@ -324,7 +327,7 @@ def load_bandpass(freq_tag, bandpass_dir):
     w = table['bandpass_weight'].value
     w /= np.trapz(w, nu)  # normalize
     return nu, w
-    
+
 
 def get_sky_realization(nside, seed, params,
                         delta_ell=10):
@@ -388,16 +391,23 @@ def get_sky_realization(nside, seed, params,
         seds /= fcmb(params['freqs'])[None, :]  # Normalize to uK_CMB
 
 
+    # SEDs of theory spectra should be unaffected by beams/bandpasses
+    seds_theory = np.array([
+    comp_sed(params['freqs'], params['nu0_d'], params['beta_d'], params['temp_d'], typ='dust'),
+    comp_sed(params['freqs'], params['nu0_s'], params['beta_s'], None, typ='sync'),
+    comp_sed(params['freqs'], None, None, None, 'cmb')])
+    seds_theory /= fcmb(params['freqs'])[None, :]  # Normalize to uK_CMB
+
     # Generate C_ells from theory
     nnu = len(params['freqs'])
     nell = lmax+1
     cl_sky = np.zeros([nnu, 2, nnu, 2, nell])
-    cl_sky[:, 0, :, 0, :] = (cl_dust_ee[None, None, :]*np.outer(seds[0], seds[0])[:, :, None] +
-                             cl_sync_ee[None, None, :]*np.outer(seds[1], seds[1])[:, :, None] +
-                             cl_cmb_ee[None, None, :]*np.outer(seds[2], seds[2])[:, :, None])
-    cl_sky[:, 1, :, 1, :] = (cl_dust_bb[None, None, :]*np.outer(seds[0], seds[0])[:, :, None] +
-                             cl_sync_bb[None, None, :]*np.outer(seds[1], seds[1])[:, :, None] +
-                             cl_cmb_bb[None, None, :]*np.outer(seds[2], seds[2])[:, :, None])
+    cl_sky[:, 0, :, 0, :] = (cl_dust_ee[None, None, :]*np.outer(seds_theory[0], seds_theory[0])[:, :, None] +
+                             cl_sync_ee[None, None, :]*np.outer(seds_theory[1], seds_theory[1])[:, :, None] +
+                             cl_cmb_ee[None, None, :]*np.outer(seds_theory[2], seds_theory[2])[:, :, None])
+    cl_sky[:, 1, :, 1, :] = (cl_dust_bb[None, None, :]*np.outer(seds_theory[0], seds_theory[0])[:, :, None] +
+                             cl_sync_bb[None, None, :]*np.outer(seds_theory[1], seds_theory[1])[:, :, None] +
+                             cl_cmb_bb[None, None, :]*np.outer(seds_theory[2], seds_theory[2])[:, :, None])
     cl_sky *= cl2dl[None, None, None, None, :]
     l_binned, windows, cl_sky_binned = bin_cls(cl_sky, delta_ell=delta_ell)
     _, cl_sky_binned, _ = get_vector_and_covar(l_binned, cl_sky_binned)
@@ -410,8 +420,11 @@ def get_sky_realization(nside, seed, params,
     maps_cmb_all = np.zeros_like(maps_signal)
 
     beam_fwhm_rad = None
-    if 'beam_fwhm_arcmin' in params and params['beam_fwhm_arcmin'] is not None:
-        beam_fwhm_rad = np.radians(np.array(params['beam_fwhm_arcmin']) / 60.)
+    if 'beam_fwhm_file' in params and params['beam_fwhm_file'] is not None:
+        rad_factor = np.pi / (60. * 180.)
+        beam_fwhm = np.loadtxt(params['beam_fwhm_file'])
+        #beam_fwhm_rad = np.radians(np.array(params['beam_fwhm_arcmin']) / 60.)
+        beam_fwhm_rad = np.array(beam_fwhm*rad_factor)
         if len(beam_fwhm_rad) != nnu:
             raise ValueError("Length of beam_fwhm_arcmin must match number of frequency channels")
     
@@ -426,16 +439,21 @@ def get_sky_realization(nside, seed, params,
         q_dust, u_dust = f_dust * Q_dust, f_dust * U_dust
         q_sync, u_sync = f_sync * Q_sync, f_sync * U_sync
         q_cmb,  u_cmb  = f_cmb  * Q_cmb,  f_cmb  * U_cmb
-    
+
+        t_dummy = np.zeros_like(q_dust)
+        
         # Beam smooth if applicable
         if beam_fwhm_rad is not None:
-            q_dust = hp.smoothing(q_dust, fwhm=beam_fwhm_rad[i], verbose=False)
-            u_dust = hp.smoothing(u_dust, fwhm=beam_fwhm_rad[i], verbose=False)
-            q_sync = hp.smoothing(q_sync, fwhm=beam_fwhm_rad[i], verbose=False)
-            u_sync = hp.smoothing(u_sync, fwhm=beam_fwhm_rad[i], verbose=False)
-            q_cmb  = hp.smoothing(q_cmb,  fwhm=beam_fwhm_rad[i], verbose=False)
-            u_cmb  = hp.smoothing(u_cmb,  fwhm=beam_fwhm_rad[i], verbose=False)
-    
+            _, q_dust, u_dust = hp.smoothing([t_dummy, q_dust, u_dust], 
+                                             fwhm=beam_fwhm_rad[i], 
+                                             pol=True)
+            _, q_sync, u_sync = hp.smoothing([t_dummy, q_sync, u_sync], 
+                                             fwhm=beam_fwhm_rad[i], 
+                                             pol=True)
+            _, q_cmb, u_cmb = hp.smoothing([t_dummy, q_cmb, u_cmb], 
+                                           fwhm=beam_fwhm_rad[i], 
+                                           pol=True)
+
         # Total map = sum of all components per freq
         maps_signal[i, 0] = q_dust + q_sync + q_cmb
         maps_signal[i, 1] = u_dust + u_sync + u_cmb
@@ -447,18 +465,14 @@ def get_sky_realization(nside, seed, params,
         maps_cmb_all[i, 0]  = q_cmb
         maps_cmb_all[i, 1]  = u_cmb
 
-
-    #dict_out = {'maps_dust': np.array([Q_dust, U_dust]),
-    #            'maps_sync': np.array([Q_sync, U_sync]),
-    #            'maps_cmb': np.array([Q_cmb, U_cmb]),
-    #            'freq_maps': maps_signal,
-    #            'seds': seds}
     dict_out = {
         'maps_dust': maps_dust_all,   # shape [nfreq, 2, npix]
         'maps_sync': maps_sync_all,
         'maps_cmb': maps_cmb_all,
         'freq_maps': maps_signal,
         'seds': seds,
+        'amp_dust': np.array([Q_dust, U_dust]),
+        'amp_sync': np.array([Q_sync, U_sync]),
         }
 
     # Generate C_ells from data

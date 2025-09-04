@@ -63,7 +63,7 @@ parser.add_option('--bandpass-dir', dest='bandpass_dir',
                   default="/global/homes/s/susannaz/Software/bandpass_sampler/SAT/", type=str,
                   help='Directory containing bandpass files (required if --use-bandpass is set)')
 
-parser.add_option('--beam-fwhm-file', dest='beam_file', default="beam_fwhm.txt", type=str,
+parser.add_option('--beam-fwhm-file', dest='beam_fwhm_file', default=None, type=str,
                   help='Path to file with beam FWHM values in arcmin, one per line matching the frequency file.')
 
 
@@ -80,13 +80,12 @@ if o.freq_file is None:
 
 freqs = np.loadtxt(o.freq_file)
 
-if o.beam_file is None:
-    raise ValueError("Must provide --beam-fwhm-file to apply beam smoothing")
-
-beam_fwhm_arcmin = np.loadtxt(o.beam_file)  # Shape: (nfreq,)
-if len(beam_fwhm_arcmin) != len(freqs):
-    raise ValueError("Mismatch: beam file and frequency file must have same number of entries")
-
+if o.beam_fwhm_file is None:
+    print("NOTE: Beam file not provided. Must provide --beam-fwhm-file to apply beam smoothing")
+else:
+    beam_fwhm = np.loadtxt(o.beam_fwhm_file)  # Shape: (nfreq,) # arcmin
+    if len(beam_fwhm) != len(freqs):
+        raise ValueError("Mismatch: beam file and frequency file must have same number of entries")
 
 os.system('mkdir -p ' + o.dirname)
 prefix = o.dirname + f'/sim_seed{o.seed}'
@@ -94,12 +93,14 @@ pars = {k: getattr(o, k)
         for k in ['seed', 'nside', 'include_cmb', 'include_sync', 'include_E', 'include_B',
                   'nu0_d', 'A_d_EE', 'A_d_BB', 'alpha_d_EE', 'alpha_d_BB', 'beta_d', 'temp_d',
                   'nu0_s', 'A_s_EE', 'A_s_BB', 'alpha_s_EE', 'alpha_s_BB', 'beta_s', 'r_tensor',
-                  'use_bandpass', 'bandpass_dir']}  # <- add new options here
+                  'use_bandpass', 'bandpass_dir', 'beam_fwhm_file']}  # <- add new options here
 
 pars['freqs'] = [float(f) for f in freqs]
+#pars['beam_file'] = [float(b) for b in beam_fwhm]
 with open(f'{prefix}_params.yaml', 'w') as file:
     yaml.safe_dump(pars, file)
 pars['freqs'] = np.array(pars['freqs'])
+#pars['beam_file'] = np.array(pars['beam_fwhm_arcmin'])
 
 # Decide whether spectral index is constant or varying
 params = ut.get_default_params()
@@ -121,22 +122,21 @@ s.save_fits(prefix+'_cl_theory.fits', overwrite=True)
 for i in range(len(freqs)):
     hp.write_map(prefix+f'_sky_band{i+1}.fits', data['freq_maps'][i], overwrite=True)
 
-if o.use_bandpass:
-    # Write actual component maps per freq (m = amp x sed)
-    for comp in ['dust', 'sync', 'cmb']:
-        for i in range(len(freqs)):
-            hp.write_map(prefix + f'_{comp}_band{i+1}.fits',
-                         data[f'maps_{comp}'][i], overwrite=True)
+# Write actual component maps per freq (m = amp x sed)
+for comp in ['dust', 'sync', 'cmb']:
+    for i in range(len(freqs)):
+        hp.write_map(prefix + f'_{comp}_band{i+1}.fits',
+                     data[f'maps_{comp}'][i], overwrite=True)
 
-        # single fits file:
-        #    Q_band1, U_band1, Q_band2, U_band2, ..., Q_bandN, U_bandN
-        maps = data[f'maps_{comp}']  # shape: [nband, 2, npix]
-        maps_reshaped = maps.reshape(-1, maps.shape[-1])  # shape: [nband*2, npix]
-        hp.write_map(prefix + f'_{comp}.fits', maps_reshaped, overwrite=True)
-else:
-    # Write component amplitude maps
-    for comp in ['dust', 'sync', 'cmb']:
-        hp.write_map(prefix+f'_{comp}.fits', data[f'maps_{comp}'], overwrite=True)
+    # single fits file:
+    #    Q_band1, U_band1, Q_band2, U_band2, ..., Q_bandN, U_bandN
+    maps = data[f'maps_{comp}']  # shape: [nband, 2, npix]
+    maps_reshaped = maps.reshape(-1, maps.shape[-1])  # shape: [nband*2, npix]
+    hp.write_map(prefix + f'_{comp}.fits', maps_reshaped, overwrite=True)
+
+# Write component amplitude maps
+for comp in ['dust', 'sync']:
+    hp.write_map(prefix+f'_{comp}_amp.fits', data[f'amp_{comp}'], overwrite=True)
 
 # Write component spectra
 sdic = {f'sed_{comp}': data['seds'][i] for i, comp in enumerate(['dust', 'sync', 'cmb'])}
@@ -147,11 +147,12 @@ np.savez(prefix+f'_seds.npz', **sdic)
 #  --output-dir ./outputs/bandpass_sim \
 #  --seed 1234 \
 #  --nside 256 \
-#  --frequencies frequencies.txt \
+#  --frequencies frequencies.txt \_loop.sh
 #  --beam-fwhm-file beams.txt \
 #  --use-bandpass \
 #  --bandpass-dir /global/homes/s/susannaz/Software/bandpass_sampler/SAT/
 
-# python simulation_simple_bandpass.py --output-dir ./outputs/bandpass_sim --seed 1234 --nside 256 --frequencies frequencies.txt --beam-fwhm-file beams.txt --use-bandpass --bandpass-dir /global/homes/s/susannaz/Software/bandpass_sampler/SAT/
+# python simulation_simple_bandpass.py --output-dir ./outputs/bandpass_sim --seed 1234 --nside 256 --frequencies freqs.txt --beam-fwhm-file beams_fwhm.txt --use-bandpass --bandpass-dir /global/homes/s/susannaz/Software/bandpass_sampler/SAT/
 
+#./run_fg_sims
 
